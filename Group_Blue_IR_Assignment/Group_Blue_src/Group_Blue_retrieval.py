@@ -1,3 +1,4 @@
+import argparse
 import time
 from pathlib import Path
 
@@ -5,267 +6,115 @@ import pandas as pd
 import pyterrier as pt
 
 from Group_Blue_config import (
-    INDEX_DIR,
-    RESULTS_DIR,
-    NUM_RESULTS,
-    BM25_RESULTS_FILE,
-    TFIDF_RESULTS_FILE,
-    PL2_RESULTS_FILE,
-    create_directories,
+    INDEX_DIR, NUM_RESULTS, RESULTS_DIR,
+    BM25_RESULTS_FILE, TFIDF_RESULTS_FILE, PL2_RESULTS_FILE,
+    FINAL_RESULTS_FILE, create_directories,
 )
-
 from Group_Blue_dataset import read_queries
-
 from Group_Blue_preprocessing import preprocess
 
 
-# ============================================================
-# PYTERRIER INITIALIZATION
-# ============================================================
-
 def initialize_pyterrier():
-
-    try:
-        if not pt.started():
-            pt.init()
-    except AttributeError:
+    if not pt.started():
         pt.init()
 
 
-# ============================================================
-# LOAD INDEX
-# ============================================================
-
 def load_index():
-
     initialize_pyterrier()
+    if not INDEX_DIR.exists():
+        raise FileNotFoundError(f"Index not found: {INDEX_DIR}. Run Group_Blue_index.py first.")
+    return pt.IndexFactory.of(str(INDEX_DIR))
 
-    index = pt.IndexFactory.of(str(INDEX_DIR))
 
-    return index
-
-
-# ============================================================
-# PREPARE QUERIES
-# ============================================================
-
-def prepare_queries():
-
-    queries = read_queries()
-
-    queries["query"] = queries["query"].fillna("")
-
-    queries["query"] = queries["query"].apply(preprocess)
-
+def prepare_queries(query_file=None):
+    queries = read_queries(query_file) if query_file else read_queries()
+    queries["query"] = queries["query"].fillna("").apply(preprocess)
+    queries = queries[queries["query"].str.strip() != ""].copy()
     return queries
 
 
-# ============================================================
-# CREATE RETRIEVER
-# ============================================================
-
-def create_retriever(
-    model,
-    k1=None,
-    b=None,
-    num_results=NUM_RESULTS
-):
-    """
-    Create Terrier sparse retrieval model.
-
-    Supported models:
-
-        TF_IDF
-        BM25
-        PL2
-    """
-
+def create_retriever(model, k1=None, b=None, num_results=NUM_RESULTS):
     index = load_index()
-
     controls = {}
-
     if model == "BM25":
-
         if k1 is not None:
             controls["bm25.k_1"] = str(k1)
-
         if b is not None:
             controls["bm25.b"] = str(b)
-
-    retriever = pt.terrier.Retriever(
-        index,
-        wmodel=model,
-        num_results=num_results,
-        controls=controls
-    )
-
-    return retriever
+    elif model not in {"TF_IDF", "PL2"}:
+        raise ValueError("Supported models: TF_IDF, BM25, PL2")
+    return pt.terrier.Retriever(index, wmodel=model, num_results=num_results, controls=controls)
 
 
-# ============================================================
-# RUN RETRIEVAL
-# ============================================================
-
-def run_retrieval(
-    model,
-    k1=None,
-    b=None,
-    num_results=NUM_RESULTS
-):
-    """
-    Run a retrieval model over all Cranfield queries.
-
-    Returns:
-
-        results
-        retrieval_time
-        average_query_time
-    """
-
-    queries = prepare_queries()
-
-    retriever = create_retriever(
-        model=model,
-        k1=k1,
-        b=b,
-        num_results=num_results
-    )
-
-    print("\n" + "=" * 60)
-
-    if model == "BM25":
-        print(
-            f"Running {model} "
-            f"(k1={k1}, b={b})"
-        )
-    else:
-        print(f"Running {model}")
-
-    print("=" * 60)
-
+def run_retrieval(model, k1=None, b=None, num_results=NUM_RESULTS, query_file=None):
+    queries = prepare_queries(query_file)
+    retriever = create_retriever(model, k1, b, num_results)
     start = time.perf_counter()
-
     results = retriever.transform(queries)
-
     total_time = time.perf_counter() - start
-
-    number_of_queries = len(queries)
-
-    average_query_time = (
-        total_time / number_of_queries
-        if number_of_queries > 0
-        else 0
-    )
-
-    results = results.sort_values(
-        ["qid", "score"],
-        ascending=[True, False]
-    )
-
-    results["rank"] = (
-        results
-        .groupby("qid")
-        .cumcount()
-        + 1
-    )
-
-    print(f"Queries          : {number_of_queries}")
-    print(f"Total time       : {total_time:.4f} sec")
-    print(f"Average/query    : {average_query_time:.6f} sec")
-    print(f"Retrieved rows   : {len(results)}")
-
-    return (
-        results,
-        total_time,
-        average_query_time
-    )
+    nqueries = len(queries)
+    avg_time = total_time / nqueries if nqueries else 0.0
+    if "rank" not in results.columns:
+        results = results.sort_values(["qid", "score"], ascending=[True, False], kind="mergesort").copy()
+        results["rank"] = results.groupby("qid").cumcount() + 1
+    results["qid"] = results["qid"].astype(str)
+    results["docno"] = results["docno"].astype(str)
+    return results, total_time, avg_time, nqueries
 
 
-# ============================================================
-# SAVE RESULTS
-# ============================================================
-
-def save_results(
-    results,
-    output_file,
-    run_name="Group_Blue"
-):
-    """
-    Save results in TREC format:
-
-        qid Q0 docno rank score runname
-    """
-
+def save_results(results, output_file, run_name="Group_Blue"):
     create_directories()
-
     output_file = Path(output_file)
-
-    with open(
-        output_file,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
+    with output_file.open("w", encoding="utf-8") as file:
         for _, row in results.iterrows():
-
             file.write(
-                f"{row['qid']} "
-                f"Q0 "
-                f"{row['docno']} "
-                f"{int(row['rank'])} "
-                f"{float(row['score']):.8f} "
-                f"{run_name}\n"
+                f"{row['qid']} Q0 {row['docno']} {int(row['rank'])} "
+                f"{float(row['score']):.8f} {run_name}\n"
             )
-
     print(f"Saved results to: {output_file}")
 
 
-# ============================================================
-# BASELINE EXPERIMENT
-# ============================================================
+def run_baseline_models(query_file=None):
+    outputs = {"TF_IDF": TFIDF_RESULTS_FILE, "BM25": BM25_RESULTS_FILE, "PL2": PL2_RESULTS_FILE}
+    rows = []
+    for model, output in outputs.items():
+        results, total, avg, nqueries = run_retrieval(model, query_file=query_file)
+        save_results(results, output, f"Group_Blue_{model}")
+        rows.append({"model": model, "k1": None, "b": None, "total_search_time": total, "average_query_time": avg, "num_queries": nqueries})
+    return pd.DataFrame(rows)
 
-def run_baseline_models():
+def retrieve(model="BM25", k1=None, b=None, query_file=None, num_results=NUM_RESULTS):
+    """
+    Compatibility wrapper for the experiment runner.
 
-    create_directories()
+    Returns only the retrieval DataFrame.
+    Timing information is handled separately by the experiment runner.
+    """
+    results, _, _, _ = run_retrieval(
+        model=model,
+        k1=k1,
+        b=b,
+        num_results=num_results,
+        query_file=query_file,
+    )
+    return results
+    
+def main():
+    parser = argparse.ArgumentParser(description="Group Blue sparse Cranfield retrieval")
+    parser.add_argument("--model", choices=["TF_IDF", "BM25", "PL2"], default="BM25")
+    parser.add_argument("--k1", type=float)
+    parser.add_argument("--b", type=float)
+    parser.add_argument("--queries", default=None)
+    parser.add_argument("--output", default=str(FINAL_RESULTS_FILE))
+    parser.add_argument("--run-name", default="Group_Blue_FINAL")
+    parser.add_argument("--num-results", type=int, default=NUM_RESULTS)
+    args = parser.parse_args()
+    results, total, avg, nqueries = run_retrieval(
+        args.model, args.k1, args.b, args.num_results, args.queries
+    )
+    save_results(results, args.output, args.run_name)
+    print(f"Queries: {nqueries}\nTotal search time: {total:.6f} sec\nAverage/query: {avg:.6f} sec")
 
-    models = [
-        ("TF_IDF", TFIDF_RESULTS_FILE),
-        ("BM25", BM25_RESULTS_FILE),
-        ("PL2", PL2_RESULTS_FILE)
-    ]
-
-    timings = []
-
-    for model, output_file in models:
-
-        results, total_time, average_time = run_retrieval(
-            model=model
-        )
-
-        save_results(
-            results,
-            output_file,
-            run_name=f"Group_Blue_{model}"
-        )
-
-        timings.append({
-            "model": model,
-            "k1": None,
-            "b": None,
-            "total_time": total_time,
-            "average_query_time": average_time
-        })
-
-    return pd.DataFrame(timings)
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
-
-    timing_results = run_baseline_models()
-
-    print("\nTiming summary:")
-    print(timing_results.to_string(index=False))
+    main()

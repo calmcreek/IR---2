@@ -1,0 +1,38 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# PyTerrier / Terrier generated index
+Group_Blue_IR_Assignment/Group_Blue_index/
+
+# Generated retrieval results
+Group_Blue_IR_Assignment/Group_Blue_results/*.txt
+Group_Blue_IR_Assignment/Group_Blue_results/*.csv
+Group_Blue_IR_Assignment/Group_Blue_results/*.json
+
+# Generated timing files
+Group_Blue_IR_Assignment/Group_Blue_results/*timing*
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log

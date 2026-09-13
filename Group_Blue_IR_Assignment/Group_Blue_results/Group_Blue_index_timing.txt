@@ -1,0 +1,5 @@
+documents_indexed=1398
+preprocessing_time_seconds=0.747731
+indexing_time_seconds=2.067771
+total_build_time_seconds=2.815502
+index_directory=/workspaces/IR---2/Group_Blue_IR_Assignment/Group_Blue_index

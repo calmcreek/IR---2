@@ -3,111 +3,61 @@ import shutil
 
 import pyterrier as pt
 
-from Group_Blue_config import (
-    INDEX_DIR,
-    create_directories,
-)
-
+from Group_Blue_config import INDEX_DIR, INDEX_TIMING_FILE, create_directories
 from Group_Blue_dataset import read_documents
-
 from Group_Blue_preprocessing import preprocess
 
 
-# ============================================================
-# PYTERRIER INITIALIZATION
-# ============================================================
-
 def initialize_pyterrier():
-
-    try:
-        if not pt.started():
-            pt.init()
-    except AttributeError:
+    if not pt.started():
         pt.init()
 
 
-# ============================================================
-# PREPARE DOCUMENTS
-# ============================================================
-
 def prepare_documents():
-
     documents = read_documents()
-
-    print(f"Loaded {len(documents)} documents.")
-
+    if len(documents) != 1400:
+        print(f"WARNING: expected 1400 documents, found {len(documents)}")
     documents["text"] = documents["text"].fillna("")
-
-    print("Preprocessing documents...")
-
     start = time.perf_counter()
-
     documents["text"] = documents["text"].apply(preprocess)
-
     preprocessing_time = time.perf_counter() - start
+    documents = documents[documents["text"].str.strip() != ""].copy()
+    print(f"Documents loaded : {len(documents)}")
+    print(f"Preprocessing    : {preprocessing_time:.6f} sec")
+    return documents, preprocessing_time
 
-    print(
-        f"Document preprocessing time: "
-        f"{preprocessing_time:.4f} seconds"
-    )
-
-    return documents
-
-
-# ============================================================
-# BUILD INDEX
-# ============================================================
 
 def build_index():
-
     create_directories()
-
     initialize_pyterrier()
-
-    documents = prepare_documents()
-
-    # Remove an existing index so experiments start cleanly.
+    documents, preprocessing_time = prepare_documents()
     if INDEX_DIR.exists():
         shutil.rmtree(INDEX_DIR)
-
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("\nBuilding Terrier index...")
-
     start = time.perf_counter()
-
     indexer = pt.terrier.IterDictIndexer(
         str(INDEX_DIR),
-        meta={
-            "docno": 32
-        },
-        type=pt.index.IndexingType.CLASSIC
+        meta={"docno": 32},
+        type=pt.index.IndexingType.CLASSIC,
     )
-
-    indexref = indexer.index(
-        documents[
-            ["docno", "text"]
-        ].to_dict("records")
-    )
-
+    indexref = indexer.index(documents[["docno", "text"]].to_dict("records"))
     indexing_time = time.perf_counter() - start
-
-    print("\n" + "=" * 60)
+    INDEX_TIMING_FILE.write_text(
+        f"documents_indexed={len(documents)}\n"
+        f"preprocessing_time_seconds={preprocessing_time:.6f}\n"
+        f"indexing_time_seconds={indexing_time:.6f}\n"
+        f"total_build_time_seconds={preprocessing_time + indexing_time:.6f}\n"
+        f"index_directory={INDEX_DIR}\n",
+        encoding="utf-8",
+    )
+    print("=" * 70)
     print("INDEXING COMPLETE")
-    print("=" * 60)
+    print("=" * 70)
+    print(f"Index       : {INDEX_DIR}")
+    print(f"Preprocess  : {preprocessing_time:.6f} sec")
+    print(f"Index       : {indexing_time:.6f} sec")
+    return indexref, indexing_time, preprocessing_time
 
-    print(f"Index location : {INDEX_DIR}")
-    print(f"Indexing time  : {indexing_time:.4f} seconds")
-
-    print("=" * 60)
-
-    return indexref, indexing_time
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
-
     build_index()
